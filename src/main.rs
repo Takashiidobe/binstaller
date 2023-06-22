@@ -1,7 +1,7 @@
 #![feature(string_remove_matches)]
 
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{Cursor, Write},
     path::{Path, PathBuf},
 };
@@ -10,6 +10,7 @@ use anyhow::Result;
 use clap::Parser;
 use directories::BaseDirs;
 use reqwest::header::USER_AGENT;
+use tempdir::TempDir;
 
 mod schema;
 use miniserde::json;
@@ -141,17 +142,27 @@ async fn main() -> Result<()> {
     let content = response.bytes().await?;
     let target_dir = PathBuf::from(exe_dir);
 
+    let tmp_dir = TempDir::new("binstaller-dir")?;
+    let tmp_dir_path = tmp_dir.path();
+
+    use std::os::unix::fs::PermissionsExt;
+
     match asset_to_dl.content_type.as_str() {
-        "application/zip" => {
-            zip_extract::extract(Cursor::new(content), &target_dir, true)?;
+        "application/zip" | "application/gzip" => {
+            zip_extract::extract(Cursor::new(content), tmp_dir_path, true)?;
+            let bin_path = tmp_dir_path.join(install.clone());
+            let local_path = target_dir.join(install.clone());
+            fs::rename(bin_path, local_path.clone())?;
+            let mut perms = fs::metadata(local_path)?.permissions();
+            perms.set_mode(0o755);
         }
-        "application/gzip" => {}
         _ => unreachable!(),
     }
 
     // check the content_type, if application/zip, then unzip, if application/gzip, untar, and then
     // move it to the right location
     // and chmod +x the binary
+    tmp_dir.close()?;
 
     Ok(())
 }
